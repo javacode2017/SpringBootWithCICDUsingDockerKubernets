@@ -1,0 +1,243 @@
+
+ssh -i "k8s.pem" ubuntu@ec2-13-233-139-0.ap-south-1.compute.amazonaws.com
+
+ step 1 : Launch Ec2-instance with Ubuntu Server.
+ 
+		a) install jenkins
+		
+		To install jenkins prerequisite is java.
+		So , install java
+		
+install java:
+------------
+
+>> sudo apt update		
+sudo apt 
+
+
+wget -q -O - https://pkg.jenkins.io/debian-stable/jenkins.io.key | sudo apt-key add -
+
+sudo sh -c 'echo deb https://pkg.jenkins.io/debian-stable binary/ > \/etc/apt/sources.list.d/jenkins.list'
+
+sudo apt-get update
+sudo apt-get install jenkins
+
+
+
+3) Setup docker in jenkins server
+================================
+
+	a) install docker
+		sudo  curl -fsSL get.docker.com | /bin/bash
+
+	b) add jenkins user to docker group()
+		sudo usermod -aG docker jenkins
+	c) Restart Jenkins
+		sudo systemctl restart jenkins
+		
+	
+===============================================================
+Installation of kubernetes
+==========================
+1 master 
+1 worker
+
+requirement for create master mechine is 2 core processor and 4 GB RAM.
+
+
+requirement for create worker mechine is 1 core processor and 1 GB RAM.
+
+
+
+common for both master and slave
+================================
+sudo apt-get update -y
+
+sudo apt-get install -y apt-transport-https
+
+apt-get update && apt-get install -y 
+  apt-transport-https ca-certificates curl software-properties-common gnupg2
+  
+  
+sudo su -
+
+curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add - 
+
+
+cat<<EOF>/etc/apt/sources.list.d/kubernetes.list
+deb https://apt.kubernetes.io/ kubernetes-xenial main
+EOF
+
+apt-get update -y 
+#disable swap memory
+swapoff -a
+sed -i ' /swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+
+#enable IP tables(pod to pod communication will happen with the help of iptables)
+modprobe br_netfilter
+sysctl -p
+sudo sysctl net.bridge.bridge-nf-call-iptables=1
+
+
+apt install docker.io -y
+usermod -aG docker ubuntu
+
+systemctl restart docker
+systemctl enable docker.service
+
+
+apt-get install -y kubelet kubeadm kubectl kubernetes-cni
+
+
+systemctl daemon-reload
+systemctl start kubelet
+systemctl enable kubelet.service
+
+
+
+========Execute only for Master mechine =====================
+
+# execute below command as root user
+
+kubeadm init
+
+#exit as a root user & execute as a normal user
+
+kubeadm join 172.31.0.20:6443 --token z1zu9e.iw4hdshdm3cvzfjx \
+    --discovery-token-ca-cert-hash sha256:b08b03147fba7744a1fcee392b4bec8439ac371812f737db2d83d8c0906bbc48
+
+
+mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+
+
+
+
+
+kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')"
+
+kubectl get nodes
+kubectl get pods --all-namespaces
+
+
+ubuntu@ip-172-31-0-20:~$ kubectl get pods --all-namespaces
+NAMESPACE     NAME                                     READY   STATUS    RESTARTS   AGE
+kube-system   coredns-f9fd979d6-t5wfk                  0/1     Running   0          26m
+kube-system   coredns-f9fd979d6-xz795                  0/1     Running   0          26m
+kube-system   etcd-ip-172-31-0-20                      1/1     Running   0          26m
+kube-system   kube-apiserver-ip-172-31-0-20            1/1     Running   0          26m
+kube-system   kube-controller-manager-ip-172-31-0-20   1/1     Running   0          26m
+kube-system   kube-proxy-99rls                         1/1     Running   0          26m
+kube-system   kube-scheduler-ip-172-31-0-20            1/1     Running   0          26m
+kube-system   weave-net-xbrbx                          2/2     Running   0          21s
+
+
+
+
+#Get Token
+
+kubeadm token create --print-join-command
+
+
+kubeadm join 172.31.0.20:6443 --token i57xvy.52e1bx1jkrno85hq     --discovery-token-ca-cert-hash sha256:b08b03147fba7744a1fcee392b4bec8439ac371812f737db2d83d8c0906bbc48
+
+
+
+copy the token and execute in worker mechine as a root user
+
+
+check any application deployed in cluster:
+
+kubectl get pods 
+
+
+
+
+-----------
+all traffic should be enabled in worker and manager mechine
+
+
+=====================================================Done with kubernets setup================================
+
+
+
+Setup Jenkins Server to deploy application into kubernetes cluster
+--------------------
+
+We can deploy docker application into kubernetes cluster from jenkins using below 2 approaches.
+
+
+1) Using kubernetes Continuous Deploy Plugin
+--------
+
+Goto jenkins --> ManagePlugins --> Available --> search for kubernetes continuous deploy --> select and install
+
+
+add kube config information in jenkins Credentials
+Jenkins --> credentials-->Select kuber configuration-->
+
+ID : KUBERNETES_CLUSTER_CONFIG
+
+
+goto kubernets worker mechine command prompt -->  cat .kube/config
+copy all the data and use in directly.
+
+
+
+
+copy kubeconfig content from kubernetes cluster 
+
+
+use Kubernetesdeploy in pipeline script
+
+add github with syntax:
+
+
+
+
+node{
+    stage("Git Clone"){
+        git 'https://github.com/MithunTechnologiesDevOps/spring-boot-mongo-docker.git'
+    }
+    stage("Maven Clean Build"){
+        def mavenHome = tool name: "Maven-3.6.1", type:"maven"
+        def mavenCMD = "${mavenHome}/bin/mvn"
+        
+        sh "${mavenCMD} clean package"
+        
+    }
+    stage("Build Docker Image"){
+        sh "docker build -t bhujatha/springboot ."
+    }
+    
+    stage("Docker Push"){
+	
+        
+        sh "docker login -u bhujatha -p bhujathaedu"
+    
+        sh "docker push bhujatha/springboot "
+    }
+	stage("Deploy Application in K82 Cluster"){
+	kubernetesDeploy(
+		configs : 'springBootMongo.yml',
+		kubeconfigId: 'kubernetesid',
+		enableConfigSubstitution : true
+	)
+	}
+}
+
+
+		
+
+
+
+
+		
+		
+		
+ install maven with global tool configuration:
+ ----------------------------------------------
+ Manage jenkins --> Global tool configuration --> Maven (add maven) -->
